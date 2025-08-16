@@ -1,0 +1,537 @@
+// Professional AIChatWidget - No template switching
+window.AIChatWidget = {
+  _contactIdentifier: null,
+  _widgetConversationThreadId: null,
+  _customerNumberCounter: null,
+  _isInitialized: false,
+
+  getContactIdentifier: function() {
+    if (!this._contactIdentifier) {
+      const localStorageKey = 'aiChatWidgetUserIdentifier_' + "689e0ecfa87a3356f9995fbe";
+      let storedId = null;
+      try {
+        storedId = localStorage.getItem(localStorageKey);
+      } catch (e) { console.warn('AIChatWidget: localStorage not accessible.'); }
+      
+      if (storedId) {
+        this._contactIdentifier = storedId;
+      } else {
+        const generateUUID = () => {
+          return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+            var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+            return v.toString(16);
+          });
+        };
+        this._contactIdentifier = generateUUID();
+        try {
+          localStorage.setItem(localStorageKey, this._contactIdentifier);
+        } catch (e) { console.warn('AIChatWidget: localStorage not accessible for saving new ID.'); }
+      }
+    }
+    return this._contactIdentifier;
+  },
+
+  setWidgetConversationThreadId: function(threadId) {
+    this._widgetConversationThreadId = threadId;
+  },
+
+  getWidgetConversationThreadId: function() {
+    return this._widgetConversationThreadId;
+  },
+
+  // LocalStorage conversation management
+  generateUUID: function() {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+      var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+      return v.toString(16);
+    });
+  },
+
+  getNextCustomerNumber: function() {
+    const key = 'aiChatWidget_' + "689e0ecfa87a3356f9995fbe" + '_customerCounter';
+    try {
+      let counter = parseInt(localStorage.getItem(key) || '0');
+      counter++;
+      localStorage.setItem(key, counter.toString());
+      return counter;
+    } catch (e) {
+      console.warn('AIChatWidget: Could not access customer counter');
+      return Date.now(); // Fallback to timestamp
+    }
+  },
+
+  // Thread management
+  saveThread: function(thread) {
+    try {
+      const threadsKey = 'aiChatWidget_' + "689e0ecfa87a3356f9995fbe" + '_threads';
+      const threadKey = 'aiChatWidget_' + "689e0ecfa87a3356f9995fbe" + '_thread_' + thread.threadId;
+      
+      // Get existing threads list
+      let threads = JSON.parse(localStorage.getItem(threadsKey) || '[]');
+      
+      // Update or add thread
+      const existingIndex = threads.findIndex(t => t.threadId === thread.threadId);
+      if (existingIndex >= 0) {
+        threads[existingIndex] = thread;
+      } else {
+        threads.push(thread);
+      }
+      
+      // Save updated list and thread details
+      localStorage.setItem(threadsKey, JSON.stringify(threads));
+      localStorage.setItem(threadKey, JSON.stringify(thread));
+      
+      return true;
+    } catch (e) {
+      console.error('AIChatWidget: Failed to save thread', e);
+      return false;
+    }
+  },
+
+  getThread: function(threadId) {
+    try {
+      const threadKey = 'aiChatWidget_' + "689e0ecfa87a3356f9995fbe" + '_thread_' + threadId;
+      const thread = localStorage.getItem(threadKey);
+      return thread ? JSON.parse(thread) : null;
+    } catch (e) {
+      console.error('AIChatWidget: Failed to get thread', e);
+      return null;
+    }
+  },
+
+  listThreads: function(contactIdentifier) {
+    try {
+      const threadsKey = 'aiChatWidget_' + "689e0ecfa87a3356f9995fbe" + '_threads';
+      const threads = JSON.parse(localStorage.getItem(threadsKey) || '[]');
+      
+      // Filter by contact identifier if provided
+      if (contactIdentifier) {
+        return threads.filter(t => t.contactIdentifier === contactIdentifier && t.status !== 'archived');
+      }
+      
+      return threads;
+    } catch (e) {
+      console.error('AIChatWidget: Failed to list threads', e);
+      return [];
+    }
+  },
+
+  // Message management
+  saveMessage: function(message) {
+    try {
+      const messagesKey = 'aiChatWidget_' + "689e0ecfa87a3356f9995fbe" + '_messages_' + message.threadId;
+      let messages = JSON.parse(localStorage.getItem(messagesKey) || '[]');
+      
+      // Add message
+      messages.push(message);
+      
+      // Save messages
+      localStorage.setItem(messagesKey, JSON.stringify(messages));
+      
+      // Update thread metadata
+      const thread = this.getThread(message.threadId);
+      if (thread) {
+        thread.lastMessageTimestamp = message.timestamp;
+        thread.lastMessageSnippet = message.content.substring(0, 200);
+        thread.totalMessages = messages.length;
+        this.saveThread(thread);
+      }
+      
+      return true;
+    } catch (e) {
+      console.error('AIChatWidget: Failed to save message', e);
+      return false;
+    }
+  },
+
+  getMessages: function(threadId) {
+    try {
+      const messagesKey = 'aiChatWidget_' + "689e0ecfa87a3356f9995fbe" + '_messages_' + threadId;
+      const messages = localStorage.getItem(messagesKey);
+      return messages ? JSON.parse(messages) : [];
+    } catch (e) {
+      console.error('AIChatWidget: Failed to get messages', e);
+      return [];
+    }
+  },
+
+  // Create or get thread for conversation
+  getOrCreateThread: function(contactIdentifier) {
+    try {
+      // Check for existing active thread
+      const threads = this.listThreads(contactIdentifier);
+      let activeThread = threads.find(t => t.status === 'active');
+      
+      if (!activeThread) {
+        // Create new thread
+        activeThread = {
+          threadId: this.generateUUID(),
+          contactIdentifier: contactIdentifier,
+          customerNumber: this.getNextCustomerNumber(),
+          firstMessageTimestamp: new Date().toISOString(),
+          lastMessageTimestamp: new Date().toISOString(),
+          lastMessageSnippet: '',
+          totalMessages: 0,
+          status: 'active'
+        };
+        this.saveThread(activeThread);
+      }
+      
+      return activeThread;
+    } catch (e) {
+      console.error('AIChatWidget: Failed to get or create thread', e);
+      return null;
+    }
+  },
+
+  init: function(config) {
+    // Professional widget always uses professional template - no settings fetch needed
+    const professionalSettings = {"theme":"light","themeColor":"#c2c2c2","showFirstMessage":true,"firstMessage":"Hello! How can I help?","logoUrl":"https://images.leadconnectorhq.com/image/f_webp/q_80/r_1200/u_https://assets.cdn.filesafe.space/Q0SE4EnlLsygTcXfFpoF/media/689ca0bb1f951efaa96b72dd.png","logoWidth":64,"logoCropPosition":{"x":50,"y":50},"logoScale":1,"widgetLogoCropPosition":{"x":50,"y":50},"widgetLogoScale":1,"useLogoForAvatar":false,"useLogoForMinimizedWidget":true,"dailyLimit":200,"widgetTitle":"Thumos","width":400,"height":700,"responsive":true,"minimizedSize":"medium","minimizedSizePixels":64,"placement":"bottom-right","inputPlaceholder":"Type your message...","chatBubble":{"enabled":true,"message":"Hi there! Need any help?","delaySeconds":0}};
+    
+    // Allow config overrides for backward compatibility
+    const finalSettings = { ...professionalSettings, ...config };
+    finalSettings.widgetId = config?.widgetId || "689e0ecfa87a3356f9995fbe";
+    
+    // Ensure baseUrl is set correctly based on environment
+    if (!finalSettings.baseUrl) {
+      // Use the fallback URL calculated server-side
+      finalSettings.baseUrl = "https://buildmyagent.io";
+    }
+    
+    this.initProfessionalWidget(finalSettings);
+  },
+  
+  initProfessionalWidget: function(settings) {
+    console.log('[AIChatWidget] Initializing professional widget');
+    
+    // Check if widget is already initialized
+    if (this._isInitialized) {
+      console.log('[AIChatWidget] Widget already initialized (flag check), skipping duplicate initialization');
+      return;
+    }
+    
+    const existingContainer = document.getElementById('ai-chat-widget-container');
+    if (existingContainer && existingContainer.querySelector('.ai-chat-widget')) {
+      console.log('[AIChatWidget] Widget already initialized (DOM check), skipping duplicate initialization');
+      this._isInitialized = true;
+      return;
+    }
+    
+    // Ensure contactIdentifier is initialized
+    this.getContactIdentifier();
+
+    const widgetId = settings.widgetId;
+    if (!widgetId) { console.error('Widget ID is required'); return; }
+
+    // Add Manrope font
+    if (!document.querySelector('link[href*="family=Manrope"]')) {
+      const preconnect = document.createElement('link');
+      preconnect.rel = 'preconnect';
+      preconnect.href = 'https://fonts.googleapis.com';
+      document.head.appendChild(preconnect);
+
+      const preconnect2 = document.createElement('link');
+      preconnect2.rel = 'preconnect';
+      preconnect2.href = 'https://fonts.gstatic.com';
+      preconnect2.crossOrigin = 'anonymous';
+      document.head.appendChild(preconnect2);
+
+      const fontLink = document.createElement('link');
+      fontLink.href = 'https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600&display=swap';
+      fontLink.rel = 'stylesheet';
+      document.head.appendChild(fontLink);
+    }
+    
+    // Add base styles
+    if (!document.getElementById('ai-chat-widget-professional-styles')) {
+       const styleSheet = document.createElement('style');
+       styleSheet.id = 'ai-chat-widget-professional-styles';
+       styleSheet.textContent = '.ai-chat-widget, .ai-chat-widget * { font-family: "Manrope", sans-serif !important; box-sizing: border-box; }';
+       document.head.appendChild(styleSheet);
+       
+       // Removed mobile-specific CSS - let widget control its own sizing
+    }
+
+    const placement = settings.placement || 'bottom-right';
+    const isMobile = window.innerWidth <= 768;
+    const buttonSize = isMobile ? 56 : (settings.minimizedSizePixels || 64);
+    
+    // Calculate placement styles dynamically based on device
+    const getPlacementStyles = function(placement, isMobile) {
+      const margin = isMobile ? '5px' : '20px';
+      const base = { position: 'fixed', margin: margin };
+      
+      switch(placement) {
+        case 'bottom-right':
+          return Object.assign({}, base, { bottom: margin, right: margin, transformOrigin: 'bottom right' });
+        case 'bottom-left':
+          return Object.assign({}, base, { bottom: margin, left: margin, transformOrigin: 'bottom left' });
+        case 'top-right':
+          return Object.assign({}, base, { top: margin, right: margin, transformOrigin: 'top right' });
+        case 'top-left':
+          return Object.assign({}, base, { top: margin, left: margin, transformOrigin: 'top left' });
+        default:
+          return Object.assign({}, base, { bottom: margin, right: margin, transformOrigin: 'bottom right' });
+      }
+    };
+    
+    const placementStyles = getPlacementStyles(placement, isMobile);
+    
+    // Create container
+    let container = document.getElementById('ai-chat-widget-container');
+    if (!container) {
+      container = document.createElement('div');
+      container.id = 'ai-chat-widget-container';
+      document.body.appendChild(container);
+    }
+    
+    // Pre-calculate full size to include chat bubble if enabled
+    const buttonPadding = 20; // padding for hover effects
+    const initialButtonSize = buttonSize + buttonPadding;
+    
+    // Calculate container size including space for chat bubble
+    let containerWidth = initialButtonSize;
+    let containerHeight = initialButtonSize;
+    
+    if (settings.chatBubble?.enabled) {
+      const bubbleGap = 12;
+      const bubbleHeight = 60; // Approximate height of bubble
+      const bubbleWidth = 280; // Max width of bubble
+      
+      // Adjust container size based on placement
+      if (placement.includes("bottom")) {
+        containerHeight = initialButtonSize + bubbleGap + bubbleHeight;
+      } else {
+        containerHeight = initialButtonSize + bubbleGap + bubbleHeight;
+      }
+      
+      // Ensure width is enough for bubble
+      containerWidth = Math.max(containerWidth, bubbleWidth + 40);
+    }
+    
+    Object.assign(container.style, {
+      ...placementStyles,
+      position: 'fixed',
+      width: containerWidth + 'px',
+      height: containerHeight + 'px',
+      padding: '0',
+      zIndex: '9999',
+      // No transition on initial load to prevent animation
+      transition: 'none',
+      background: 'transparent',
+      overflow: 'visible',
+      pointerEvents: 'auto',
+      boxSizing: 'border-box'
+    });
+    
+    // Add transitions after a short delay to prevent initial animation
+    setTimeout(() => {
+      container.style.transition = 'width 0.2s cubic-bezier(0.4, 0, 0.2, 1), height 0.2s cubic-bezier(0.4, 0, 0.2, 1), top 0.2s cubic-bezier(0.4, 0, 0.2, 1), left 0.2s cubic-bezier(0.4, 0, 0.2, 1), right 0.2s cubic-bezier(0.4, 0, 0.2, 1), bottom 0.2s cubic-bezier(0.4, 0, 0.2, 1)';
+    }, 100);
+    
+    // Create iframe container
+    const iframeContainer = document.createElement('div');
+    iframeContainer.className = 'ai-chat-widget';
+    iframeContainer.style.cssText = 'width: 100%; height: 100%; border-radius: 16px; overflow: hidden; transition: border-radius 0.2s cubic-bezier(0.4, 0, 0.2, 1), transform 0.2s cubic-bezier(0.4, 0, 0.2, 1); transform-origin: ' + placementStyles.transformOrigin + '; background-color: transparent; position: relative;';
+    
+    // Create iframe - Always load professional template
+    const iframe = document.createElement('iframe');
+    iframe.setAttribute('allowtransparency', 'true');
+    iframe.setAttribute('frameborder', '0');
+    iframe.setAttribute('scrolling', 'no');
+    Object.assign(iframe.style, {
+      width: '100%',
+      height: '100%',
+      border: 'none',
+      borderRadius: '16px',
+      background: 'transparent',
+      backgroundColor: 'transparent',
+      colorScheme: 'normal',
+      pointerEvents: 'auto',
+      visibility: 'visible',
+      position: 'absolute',
+      top: '0',
+      left: '0'
+    });
+    
+    // Professional iframe URL - no template ambiguity
+    const iframeSrc = settings.baseUrl + '/widget/' + widgetId + '?theme=' + settings.theme + '&themeColor=' + encodeURIComponent(settings.themeColor) + '&template=professional';
+    console.log('[AIChatWidget] Loading professional iframe from:', iframeSrc);
+    
+    iframe.onerror = function() {
+      console.error('[AIChatWidget] Failed to load professional widget iframe');
+    };
+    
+    iframe.onload = function() {
+      console.log('[AIChatWidget] Professional widget iframe loaded successfully');
+    };
+    
+    iframe.src = iframeSrc;
+    iframeContainer.appendChild(iframe);
+    
+    // Message listeners
+    window.addEventListener('message', (event) => {
+      // Handle resize messages from iframe
+      if (event.data && event.data.type === 'resize-widget' && event.source === iframe.contentWindow) {
+        // Check if mobile and open for full-screen
+        const isMobileView = event.data.isMobile || window.innerWidth <= 768;
+        
+        if (event.data.isOpen && isMobileView && settings.responsive !== false) {
+          // Full screen for mobile when open
+          container.style.width = '100vw';
+          container.style.height = '100vh';
+          container.style.maxWidth = '100vw';
+          container.style.maxHeight = '100vh';
+          container.style.position = 'fixed';
+          container.style.top = '0';
+          container.style.left = '0';
+          container.style.right = '0';
+          container.style.bottom = '0';
+          container.style.margin = '0';
+          container.style.padding = '0';
+          container.style.zIndex = '9999';
+          container.style.transform = 'none';
+          container.style.transformOrigin = 'center';
+          
+          iframeContainer.style.width = '100%';
+          iframeContainer.style.height = '100%';
+          iframeContainer.style.borderRadius = '0';
+          iframeContainer.style.transform = 'none';
+          
+          document.body.style.overflow = 'hidden';
+          document.documentElement.style.overflow = 'hidden';
+        } else {
+          // Use exact dimensions for desktop or minimized state
+          const vw = window.innerWidth || document.documentElement.clientWidth;
+          const vh = window.innerHeight || document.documentElement.clientHeight;
+          const targetW = (settings.responsive !== false) ? Math.min(event.data.width, Math.round(vw * 0.96)) : event.data.width;
+          const targetH = (settings.responsive !== false) ? Math.min(event.data.height, Math.round(vh * 0.96)) : event.data.height;
+          container.style.width = targetW + 'px';
+          container.style.height = targetH + 'px';
+          iframeContainer.style.width = targetW + 'px';
+          iframeContainer.style.height = targetH + 'px';
+          
+          // Reset styles for non-fullscreen
+          // Clear all positioning first
+          container.style.top = '';
+          container.style.left = '';
+          container.style.right = '';
+          container.style.bottom = '';
+          
+          // Then apply placement styles
+          const currentPlacementStyles = getPlacementStyles(placement, isMobileView);
+          Object.assign(container.style, currentPlacementStyles);
+          container.style.position = 'fixed';
+          container.style.maxWidth = 'none';
+          container.style.maxHeight = 'none';
+          container.style.padding = '0';
+          container.style.zIndex = '9999';
+          container.style.transform = '';
+          container.style.transformOrigin = currentPlacementStyles.transformOrigin;
+          
+          iframeContainer.style.borderRadius = '16px';
+          iframeContainer.style.transform = '';
+          
+          if (!event.data.isOpen) {
+            document.body.style.overflow = '';
+            document.documentElement.style.overflow = '';
+          }
+        }
+      }
+      
+      if (event.data && event.data.type === 'AIChatWidgetInternal') {
+        if (event.data.action === 'getIdentifiers' && event.source === iframe.contentWindow) {
+          event.source.postMessage({
+            type: 'AIChatWidgetInternalResponse',
+            action: 'identifiers',
+            contactIdentifier: this.getContactIdentifier(),
+            widgetConversationThreadId: this.getWidgetConversationThreadId()
+          }, '*');
+        }
+        if (event.data.action === 'setWidgetConversationThreadId' && event.data.threadId) {
+          this.setWidgetConversationThreadId(event.data.threadId);
+        }
+        
+        // Handle localStorage operations
+        if (event.source === iframe.contentWindow) {
+          switch(event.data.action) {
+            case 'getOrCreateThread':
+              const thread = this.getOrCreateThread(event.data.contactIdentifier);
+              event.source.postMessage({
+                type: 'AIChatWidgetInternalResponse',
+                action: 'threadCreated',
+                thread: thread
+              }, '*');
+              if (thread) {
+                this.setWidgetConversationThreadId(thread.threadId);
+              }
+              break;
+              
+            case 'saveMessage':
+              const messageSaved = this.saveMessage(event.data.message);
+              event.source.postMessage({
+                type: 'AIChatWidgetInternalResponse',
+                action: 'messageSaved',
+                success: messageSaved
+              }, '*');
+              break;
+              
+            case 'getMessages':
+              const messages = this.getMessages(event.data.threadId);
+              event.source.postMessage({
+                type: 'AIChatWidgetInternalResponse',
+                action: 'messages',
+                messages: messages
+              }, '*');
+              break;
+              
+            case 'listThreads':
+              const threads = this.listThreads(event.data.contactIdentifier);
+              event.source.postMessage({
+                type: 'AIChatWidgetInternalResponse',
+                action: 'threads',
+                threads: threads
+              }, '*');
+              break;
+          }
+        }
+      }
+    });
+
+    // Initialize DOM - only append iframe container
+    container.appendChild(iframeContainer);
+    
+    // Mark as initialized
+    this._isInitialized = true;
+    
+    console.log('[AIChatWidget] Professional widget initialized successfully');
+  }
+};
+
+// Auto-initialize professional widget
+(function() {
+  var scripts = document.getElementsByTagName('script');
+  var widgetId = null;
+  
+  for (var i = 0; i < scripts.length; i++) {
+    var src = scripts[i].src || '';
+    var match = src.match(/\/widget\/([^\/]+)\/widget-professional\.js/);
+    if (match) {
+      widgetId = match[1];
+      break;
+    }
+  }
+  
+  if (widgetId) {
+    console.log('[AIChatWidget] Auto-initializing professional widget with ID:', widgetId);
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', function() {
+        window.AIChatWidget.init({ widgetId: widgetId });
+      });
+    } else {
+      window.AIChatWidget.init({ widgetId: widgetId });
+    }
+  } else {
+    console.warn('[AIChatWidget] Could not auto-initialize professional widget: unable to extract widgetId');
+  }
+})();
